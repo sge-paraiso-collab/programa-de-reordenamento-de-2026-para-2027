@@ -9,15 +9,37 @@ import plotly.express as px
 # 1. FUNÇÕES DE PROCESSAMENTO E CARREGAMENTO
 # ==========================================
 
+def normalizar_texto(texto):
+    if pd.isna(texto):
+        return ""
+    txt = str(texto).upper().strip()
+    subst = {
+        'PARAISO DO TOCANTINS': 'PARAÍSO DO TOCANTINS',
+        'PARAÍSO': 'PARAÍSO DO TOCANTINS',
+        'PARAISO': 'PARAÍSO DO TOCANTINS',
+        'MARIANOPOLIS DO TOCANTINS': 'MARIANÓPOLIS DO TOCANTINS',
+        'DIVINOPOLIS DO TOCANTINS': 'DIVINÓPOLIS DO TOCANTINS',
+        'CRISTALANDIA': 'CRISTALÂNDIA',
+        'ABREULANDIA': 'ABREULÂNDIA',
+        'BARROLANDIA': 'BARROLÂNDIA',
+        'COLEGIO': 'COLÉGIO',
+        'DAVID BARBOA ROLINS': 'DAVID BARBOSA ROLINS',
+        'COLÉGIO OTACÍLIO MARQUES ROSAL': 'COLÉGIO MILITAR DO ESTADO DO TOCANTINS - OTACÍLIO MARQUES ROSAL',
+        'ESCOLA ESTADUAL DE TEMPO INTEGRAL': 'ESCOLA DE TEMPO INTEGRAL',
+        'DONA CÃNDIDA': 'DONA CANDIDA',
+        'KUBITSCHEK DE OLIVERA': 'KUBITSCHEK DE OLIVEIRA'
+    }
+    for de, para in subst.items():
+        txt = txt.replace(de, para)
+    return txt
+
 def carregar_dados_locais():
-    """Carrega automaticamente os arquivos do repositório/pasta do projeto."""
     file_turmas = "CadastroDeTurmas_26_10_2026.xlsx" if os.path.exists("CadastroDeTurmas_26_10_2026.xlsx") else None
     file_ta = "SRE - PARAISO  T.A 2026_2027 (5).xlsx" if os.path.exists("SRE - PARAISO  T.A 2026_2027 (5).xlsx") else None
     file_salas = "Levantamento de salas ociosas SRE-2026.xlsx" if os.path.exists("Levantamento de salas ociosas SRE-2026.xlsx") else None
     return file_turmas, file_ta, file_salas
 
 def processar_reordenamento(df):
-    """Processa o reordenamento escolar com base na planilha CadastroDeTurmas."""
     df_regular = df[(df['TIPO DE TURMA'] == 'Escolarização') & (df['SITUAÇÃO'] == 'Ativa')].copy()
     
     mapeamento_transicao = {
@@ -51,9 +73,11 @@ def processar_reordenamento(df):
         return "Sede"
 
     df_2027_base['LOCAL_TIPO'] = df_2027_base.apply(identificar_local, axis=1)
-    resultados = []
+    df_2027_base['CIDADE_NORM'] = df_2027_base['CIDADE'].apply(normalizar_texto)
+    df_2027_base['ESCOLA_NORM'] = df_2027_base['ESCOLA'].apply(normalizar_texto)
 
-    agrupado = df_2027_base.groupby(['CIDADE', 'ESCOLA', 'LOCAL_TIPO', 'ANO/SÉRIE 2027'])
+    resultados = []
+    agrupado = df_2027_base.groupby(['CIDADE_NORM', 'ESCOLA_NORM', 'LOCAL_TIPO', 'ANO/SÉRIE 2027'])
 
     for (cidade, escola, local_tipo, serie_2027), grupo in agrupado:
         total_estudantes = grupo['QUANTIDADE DE ESTUDANTES CURSANDO'].sum()
@@ -83,110 +107,67 @@ def processar_reordenamento(df):
 
     return pd.DataFrame(resultados)
 
-
 def processar_transferencia_automatica(file):
-    """Carrega dados da planilha de Transferência Automática (T.A.)."""
     df_ta = pd.read_excel(file, sheet_name='Município -> Estado', header=1)
     df_clean = df_ta.dropna(subset=['MUNICIPIO', 'QUANT. DE ALUNOS']).copy()
     
-    df_clean.rename(columns={
-        'MUNICIPIO': 'CIDADE',
-        'U.E. ORIGEM': 'ESCOLA_ORIGEM',
-        'U.E. DESTINO': 'ESCOLA_DESTINO',
-        'ANO/\nSÉRIE/PERÍODO DE ORIGEM': 'SERIE_ORIGEM',
-        'ANO/\nSÉRIE/PERÍODODE DESTINO': 'SERIE_DESTINO',
-        'TOTAL DE ALUNOS': 'TOTAL_ALUNOS',
-        'ALUNOS ESPECIAIS': 'ALUNOS_PCD'
-    }, inplace=True)
+    df_clean['CIDADE'] = df_clean['MUNICIPIO'].apply(normalizar_texto)
+    df_clean['ESCOLA_ORIGEM'] = df_clean['U.E. ORIGEM'].apply(normalizar_texto)
+    df_clean['ESCOLA_DESTINO'] = df_clean['U.E. DESTINO'].apply(normalizar_texto)
+    df_clean['SERIE_ORIGEM'] = df_clean['ANO/\nSÉRIE/PERÍODO DE ORIGEM']
+    df_clean['SERIE_DESTINO'] = df_clean['ANO/\nSÉRIE/PERÍODODE DESTINO']
+    df_clean['TOTAL_ALUNOS'] = pd.to_numeric(df_clean['TOTAL DE ALUNOS'], errors='coerce').fillna(0).astype(int)
+    df_clean['ALUNOS_PCD'] = pd.to_numeric(df_clean['ALUNOS ESPECIAIS'], errors='coerce').fillna(0).astype(int)
+    
     return df_clean
 
-
 def processar_salas_ociosas(file):
-    """Carrega dados do levantamento de capacidade física e salas livres."""
     df_raw = pd.read_excel(file, header=1)
     df_salas = df_raw.iloc[2:].copy()
     df_salas.columns = [
-        'Nº', 'INEP', 'ESCOLA', 'TOTAL_SALAS', 
+        'Nº', 'INEP', 'ESCOLA_RAW', 'TOTAL_SALAS', 
         'TURMAS_2026_MAT', 'TURMAS_2026_VESP', 'TURMAS_2026_NOT', 'TURMAS_2026_INT',
         'SALAS_LIVRES_2027_MAT', 'SALAS_LIVRES_2027_VESP', 'SALAS_LIVRES_2027_NOT', 'SALAS_LIVRES_2027_INT',
         'OBSERVACAO'
     ]
-    df_salas = df_salas.dropna(subset=['ESCOLA']).copy()
-    df_salas = df_salas[df_salas['ESCOLA'] != 'Escola'].copy()
+    df_salas = df_salas.dropna(subset=['ESCOLA_RAW']).copy()
+    df_salas = df_salas[df_salas['ESCOLA_RAW'] != 'Escola'].copy()
+
+    df_salas['ESCOLA'] = df_salas['ESCOLA_RAW'].apply(normalizar_texto)
 
     cols_num = ['TOTAL_SALAS', 'TURMAS_2026_MAT', 'TURMAS_2026_VESP', 'TURMAS_2026_NOT', 'TURMAS_2026_INT',
                 'SALAS_LIVRES_2027_MAT', 'SALAS_LIVRES_2027_VESP', 'SALAS_LIVRES_2027_NOT', 'SALAS_LIVRES_2027_INT']
     
     for c in cols_num:
-        df_salas[c] = pd.to_numeric(df_salas[c], errors='coerce').fillna(0)
+        df_salas[c] = pd.to_numeric(df_salas[c], errors='coerce').fillna(0).astype(int)
         
     return df_salas
 
 # ==========================================
-# 2. CONFIGURAÇÃO DA PÁGINA E ESTILIZAÇÃO CSS
+# 2. INTERFACE STREAMLIT E DADOS
 # ==========================================
-st.set_page_config(
-    page_title="Sistema Integrado 2027 - SRE Paraíso",
-    page_icon="🏛️",
-    layout="wide"
-)
+st.set_page_config(page_title="Sistema Integrado 2027 - SRE Paraíso", page_icon="🏛️", layout="wide")
 
 st.markdown("""
     <style>
-    .kpi-container {
-        display: flex;
-        justify-content: space-between;
-        gap: 15px;
-        margin-bottom: 20px;
-    }
-    .kpi-card {
-        background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
-        border-radius: 12px;
-        padding: 18px 22px;
-        flex: 1;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        border: 1px solid #e9ecef;
-        transition: transform 0.2s ease-in-out;
-    }
-    .kpi-card:hover {
-        transform: translateY(-2px);
-    }
+    .kpi-container { display: flex; justify-content: space-between; gap: 15px; margin-bottom: 20px; }
+    .kpi-card { background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%); border-radius: 12px; padding: 18px 22px; flex: 1; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #e9ecef; }
     .kpi-card-blue { border-left: 6px solid #1E88E5; }
     .kpi-card-green { border-left: 6px solid #2E7D32; }
     .kpi-card-orange { border-left: 6px solid #EF6C00; }
     .kpi-card-purple { border-left: 6px solid #8E24AA; }
-    
-    .kpi-title {
-        font-size: 0.85rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: #6c757d;
-        margin-bottom: 6px;
-    }
-    .kpi-value {
-        font-size: 2rem;
-        font-weight: 800;
-        color: #2c3e50;
-        line-height: 1.1;
-    }
-    .kpi-sub {
-        font-size: 0.78rem;
-        color: #95a5a6;
-        margin-top: 5px;
-    }
+    .kpi-title { font-size: 0.85rem; font-weight: 700; text-transform: uppercase; color: #6c757d; margin-bottom: 6px; }
+    .kpi-value { font-size: 2rem; font-weight: 800; color: #2c3e50; line-height: 1.1; }
+    .kpi-sub { font-size: 0.78rem; color: #95a5a6; margin-top: 5px; }
     </style>
 """, unsafe_allow_html=True)
 
-# Cabeçalho Principal
 st.title("🏛️ Painel Integrado de Reordenamento Escolar (2026 ➔ 2027)")
 st.markdown("##### **Superintendência Regional de Educação de Paraíso do Tocantins - SEDUC/TO**")
 st.markdown("---")
 
-# Verificação de arquivos locais/embutidos no repositório
 auto_turmas, auto_ta, auto_salas = carregar_dados_locais()
 
-# Sidebar / Carregamento dos Arquivos
 st.sidebar.image("https://img.icons8.com/color/96/school.png", width=70)
 st.sidebar.title("Central de Dados")
 
@@ -199,59 +180,52 @@ if file_turmas:
     df_projetado = processar_reordenamento(df_raw)
 
     st.sidebar.markdown("---")
-    st.sidebar.header("🔍 Filtros Dinâmicos")
+    st.sidebar.header("🔍 Filtros Globais")
+    
     cidades = ["Todas"] + sorted(list(df_projetado['CIDADE'].unique()))
     cidade_sel = st.sidebar.selectbox("Município:", cidades)
 
+    df_proj_f = df_projetado.copy()
     if cidade_sel != "Todas":
-        df_projetado = df_projetado[df_projetado['CIDADE'] == cidade_sel]
+        df_proj_f = df_proj_f[df_proj_f['CIDADE'] == cidade_sel]
 
-    escolas = ["Todas"] + sorted(list(df_projetado['ESCOLA'].unique()))
+    escolas = ["Todas"] + sorted(list(df_proj_f['ESCOLA'].unique()))
     escola_sel = st.sidebar.selectbox("Unidade Escolar:", escolas)
 
     if escola_sel != "Todas":
-        df_projetado = df_projetado[df_projetado['ESCOLA'] == escola_sel]
+        df_proj_f = df_proj_f[df_proj_f['ESCOLA'] == escola_sel]
 
-    # Estrutura Principal de Abas
     aba1, aba2, aba3, aba4, aba5 = st.tabs([
         "📋 Projeção Detalhada", 
         "📊 Dashboard Reordenamento", 
         "🔄 Transferência Automática (T.A.)",
         "🏢 Capacidade Física & Salas",
-        "🎯 Matriz de Viabilidade (Salas vs T.A.)"
+        "🎯 Matriz de Viabilidade (Salas vs Demandas)"
     ])
 
-    # ------------------------------------------
-    # ABA 1: PROJEÇÃO DETALHADA
-    # ------------------------------------------
     with aba1:
         st.subheader("📋 Planilha Otimizada de Reordenamento 2027")
-        
-        total_estudantes = df_projetado["TOTAL ESTUDANTES 2027"].sum()
-        total_salas = df_projetado["SALAS NECESSÁRIAS 2027"].sum()
-        total_escolas = df_projetado["ESCOLA"].nunique()
-
         st.markdown(f"""
         <div class="kpi-container">
             <div class="kpi-card kpi-card-blue">
                 <div class="kpi-title">Estudantes Projetados</div>
-                <div class="kpi-value">{total_estudantes:,}</div>
+                <div class="kpi-value">{df_proj_f["TOTAL ESTUDANTES 2027"].sum():,}</div>
                 <div class="kpi-sub">Fluxo regular 2026 -> 2027</div>
             </div>
             <div class="kpi-card kpi-card-green">
                 <div class="kpi-title">Salas Necessárias</div>
-                <div class="kpi-value">{total_salas:,}</div>
+                <div class="kpi-value">{df_proj_f["SALAS NECESSÁRIAS 2027"].sum():,}</div>
                 <div class="kpi-sub">Turmas otimizadas</div>
             </div>
             <div class="kpi-card kpi-card-orange">
                 <div class="kpi-title">Unidades Escolas</div>
-                <div class="kpi-value">{total_escolas}</div>
-                <div class="kpi-sub">Escolas mapeadas</div>
+                <div class="kpi-value">{df_proj_f["ESCOLA"].nunique()}</div>
+                <div class="kpi-sub">Escolas no filtro</div>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-        st.dataframe(df_projetado, use_container_width=True)
+        st.dataframe(df_proj_f, use_container_width=True)
 
         def converter_para_excel(df):
             output = io.BytesIO()
@@ -260,65 +234,28 @@ if file_turmas:
             return output.getvalue()
 
         st.download_button(
-            label="📥 Baixar Planilha Otimizada de 2027 (Excel .xlsx)",
-            data=converter_para_excel(df_projetado),
+            label="📥 Baixar Planilha Otimizada (Excel .xlsx)",
+            data=converter_para_excel(df_proj_f),
             file_name="Projecao_Reordenamento_2027_Paraiso.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-    # ------------------------------------------
-    # ABA 2: DASHBOARD REORDENAMENTO
-    # ------------------------------------------
     with aba2:
         st.subheader("📊 Análise Gráfica do Reordenamento")
 
         col_g1, col_g2 = st.columns(2)
-
         with col_g1:
-            df_cid = df_projetado.groupby('CIDADE')['TOTAL ESTUDANTES 2027'].sum().reset_index().sort_values('TOTAL ESTUDANTES 2027', ascending=True)
-            fig_cid = px.bar(
-                df_cid, x='TOTAL ESTUDANTES 2027', y='CIDADE', orientation='h',
-                title="Estudantes Projetados por Município",
-                text_auto=True, color='TOTAL ESTUDANTES 2027', color_continuous_scale='Blues'
-            )
+            df_cid = df_proj_f.groupby('CIDADE')['TOTAL ESTUDANTES 2027'].sum().reset_index().sort_values('TOTAL ESTUDANTES 2027', ascending=True)
+            fig_cid = px.bar(df_cid, x='TOTAL ESTUDANTES 2027', y='CIDADE', orientation='h', title="Estudantes por Município", text_auto=True, color='TOTAL ESTUDANTES 2027', color_continuous_scale='Blues')
             fig_cid.update_layout(showlegend=False, height=400)
             st.plotly_chart(fig_cid, use_container_width=True)
 
         with col_g2:
-            df_ser = df_projetado.groupby('SÉRIE 2027')['TOTAL ESTUDANTES 2027'].sum().reset_index()
-            fig_ser = px.bar(
-                df_ser, x='SÉRIE 2027', y='TOTAL ESTUDANTES 2027',
-                title="Distribuição de Estudantes por Série / Ano (2027)",
-                text_auto=True, color='TOTAL ESTUDANTES 2027', color_continuous_scale='Teal'
-            )
+            df_ser = df_proj_f.groupby('SÉRIE 2027')['TOTAL ESTUDANTES 2027'].sum().reset_index()
+            fig_ser = px.bar(df_ser, x='SÉRIE 2027', y='TOTAL ESTUDANTES 2027', title="Estudantes por Série / Ano", text_auto=True, color='TOTAL ESTUDANTES 2027', color_continuous_scale='Teal')
             fig_ser.update_layout(showlegend=False, height=400)
             st.plotly_chart(fig_ser, use_container_width=True)
 
-        col_g3, col_g4 = st.columns(2)
-
-        with col_g3:
-            df_tur = df_projetado.groupby('TURNO 2027')['SALAS NECESSÁRIAS 2027'].sum().reset_index()
-            fig_tur = px.pie(
-                df_tur, names='TURNO 2027', values='SALAS NECESSÁRIAS 2027',
-                title="Projeção de Alocação de Salas por Turno", hole=0.45,
-                color_discrete_sequence=px.colors.qualitative.Pastel
-            )
-            fig_tur.update_layout(height=380)
-            st.plotly_chart(fig_tur, use_container_width=True)
-
-        with col_g4:
-            df_top = df_projetado.groupby('ESCOLA')[['TOTAL ESTUDANTES 2027', 'SALAS NECESSÁRIAS 2027']].sum().reset_index().sort_values('SALAS NECESSÁRIAS 2027', ascending=False).head(6)
-            fig_top = px.bar(
-                df_top, x='SALAS NECESSÁRIAS 2027', y='ESCOLA', orientation='h',
-                title="Top Escolas com Maior Demanda de Salas Físicas",
-                text_auto=True, color='SALAS NECESSÁRIAS 2027', color_continuous_scale='Reds'
-            )
-            fig_top.update_layout(showlegend=False, height=380)
-            st.plotly_chart(fig_top, use_container_width=True)
-
-    # ------------------------------------------
-    # ABA 3: TRANSFERÊNCIA AUTOMÁTICA
-    # ------------------------------------------
     with aba3:
         st.subheader("🔄 Ingressantes da Rede Municipal (Transferência Automática)")
 
@@ -326,170 +263,77 @@ if file_turmas:
             df_ta = processar_transferencia_automatica(file_ta)
             if cidade_sel != "Todas":
                 df_ta = df_ta[df_ta['CIDADE'] == cidade_sel]
-
-            m_ta1 = int(df_ta['TOTAL_ALUNOS'].sum())
-            m_ta2 = int(df_ta['ALUNOS_PCD'].sum())
-            m_ta3 = df_ta['ESCOLA_ORIGEM'].nunique()
+            if escola_sel != "Todas":
+                df_ta = df_ta[df_ta['ESCOLA_DESTINO'] == escola_sel]
 
             st.markdown(f"""
             <div class="kpi-container">
                 <div class="kpi-card kpi-card-orange">
-                    <div class="kpi-title">Ingressantes T.A. (Município -> Estado)</div>
-                    <div class="kpi-value">{m_ta1:,}</div>
-                    <div class="kpi-sub">Estudantes encaminhados</div>
+                    <div class="kpi-title">Ingressantes T.A.</div>
+                    <div class="kpi-value">{int(df_ta['TOTAL_ALUNOS'].sum()):,}</div>
+                    <div class="kpi-sub">Município -> Estado</div>
                 </div>
                 <div class="kpi-card kpi-card-purple">
-                    <div class="kpi-title">Estudantes PCDs / Ed. Especial</div>
-                    <div class="kpi-value">{m_ta2}</div>
-                    <div class="kpi-sub">Atendimento especializado</div>
+                    <div class="kpi-title">Estudantes PCDs</div>
+                    <div class="kpi-value">{int(df_ta['ALUNOS_PCD'].sum())}</div>
+                    <div class="kpi-sub">Educação Especial</div>
                 </div>
                 <div class="kpi-card kpi-card-blue">
-                    <div class="kpi-title">Escolas Municipais doadoras</div>
-                    <div class="kpi-value">{m_ta3}</div>
-                    <div class="kpi-sub">Origem da demanda</div>
+                    <div class="kpi-title">Escolas Doadoras</div>
+                    <div class="kpi-value">{df_ta['ESCOLA_ORIGEM'].nunique()}</div>
+                    <div class="kpi-sub">Rede Municipal</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            col_ta1, col_ta2 = st.columns(2)
-
-            with col_ta1:
-                df_ta_cid = df_ta.groupby('CIDADE')['TOTAL_ALUNOS'].sum().reset_index().sort_values('TOTAL_ALUNOS', ascending=True)
-                fig_ta_cid = px.bar(
-                    df_ta_cid, x='TOTAL_ALUNOS', y='CIDADE', orientation='h',
-                    title="Ingressantes T.A. por Município",
-                    text_auto=True, color='TOTAL_ALUNOS', color_continuous_scale='Oranges'
-                )
-                fig_ta_cid.update_layout(showlegend=False, height=380)
-                st.plotly_chart(fig_ta_cid, use_container_width=True)
-
-            with col_ta2:
-                df_ta_ser = df_ta.groupby('SERIE_DESTINO')['TOTAL_ALUNOS'].sum().reset_index()
-                fig_ta_ser = px.pie(
-                    df_ta_ser, names='SERIE_DESTINO', values='TOTAL_ALUNOS',
-                    title="Etapa de Entrada na Rede Estadual", hole=0.4
-                )
-                fig_ta_ser.update_layout(height=380)
-                st.plotly_chart(fig_ta_ser, use_container_width=True)
-
-            st.markdown("##### 📜 Detalhamento do Fluxo de Origem e Destino")
             st.dataframe(df_ta[['CIDADE', 'ESCOLA_ORIGEM', 'ESCOLA_DESTINO', 'SERIE_DESTINO', 'TOTAL_ALUNOS', 'ALUNOS_PCD']], use_container_width=True)
 
-        else:
-            st.info("💡 Faça o upload do arquivo 'SRE - PARAISO T.A 2026_2027.xlsx' no menu lateral para habilitar este dashboard.")
-
-    # ------------------------------------------
-    # ABA 4: CAPACIDADE FÍSICA E SALAS LIVRES
-    # ------------------------------------------
     with aba4:
         st.subheader("🏢 Estrutura Física e Ociosidade de Salas")
 
         if file_salas:
             df_s = processar_salas_ociosas(file_salas)
-
-            k_s1 = int(df_s['TOTAL_SALAS'].sum())
-            k_s2 = int(df_s['SALAS_LIVRES_2027_MAT'].sum())
-            k_s3 = int(df_s['SALAS_LIVRES_2027_VESP'].sum())
-            k_s4 = int(df_s['SALAS_LIVRES_2027_NOT'].sum())
+            if escola_sel != "Todas":
+                df_s = df_s[df_s['ESCOLA'] == escola_sel]
 
             st.markdown(f"""
             <div class="kpi-container">
                 <div class="kpi-card kpi-card-blue">
                     <div class="kpi-title">Salas Existentes</div>
-                    <div class="kpi-value">{k_s1}</div>
-                    <div class="kpi-sub">Capacidade física total</div>
+                    <div class="kpi-value">{int(df_s['TOTAL_SALAS'].sum())}</div>
                 </div>
                 <div class="kpi-card kpi-card-green">
-                    <div class="kpi-title">Salas Livres (Matutino)</div>
-                    <div class="kpi-value">{k_s2}</div>
-                    <div class="kpi-sub">Disponíveis em 2027</div>
+                    <div class="kpi-title">Livres Matutino</div>
+                    <div class="kpi-value">{int(df_s['SALAS_LIVRES_2027_MAT'].sum())}</div>
                 </div>
                 <div class="kpi-card kpi-card-orange">
-                    <div class="kpi-title">Salas Livres (Vespertino)</div>
-                    <div class="kpi-value">{k_s3}</div>
-                    <div class="kpi-sub">Disponíveis em 2027</div>
-                </div>
-                <div class="kpi-card kpi-card-purple">
-                    <div class="kpi-title">Salas Livres (Noturno)</div>
-                    <div class="kpi-value">{k_s4}</div>
-                    <div class="kpi-sub">Disponíveis em 2027</div>
+                    <div class="kpi-title">Livres Vespertino</div>
+                    <div class="kpi-value">{int(df_s['SALAS_LIVRES_2027_VESP'].sum())}</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            col_s1, col_s2 = st.columns(2)
+            st.dataframe(df_s[['ESCOLA', 'TOTAL_SALAS', 'SALAS_LIVRES_2027_MAT', 'SALAS_LIVRES_2027_VESP', 'SALAS_LIVRES_2027_NOT', 'OBSERVACAO']], use_container_width=True)
 
-            with col_s1:
-                df_s_topm = df_s.sort_values('SALAS_LIVRES_2027_MAT', ascending=False).head(7)
-                fig_s1 = px.bar(
-                    df_s_topm, x='SALAS_LIVRES_2027_MAT', y='ESCOLA', orientation='h',
-                    title="Escolas com Maior Reserva no Matutino",
-                    text_auto=True, color='SALAS_LIVRES_2027_MAT', color_continuous_scale='Greens'
-                )
-                fig_s1.update_layout(showlegend=False, height=380)
-                st.plotly_chart(fig_s1, use_container_width=True)
-
-            with col_s2:
-                df_s_topv = df_s.sort_values('SALAS_LIVRES_2027_VESP', ascending=False).head(7)
-                fig_s2 = px.bar(
-                    df_s_topv, x='SALAS_LIVRES_2027_VESP', y='ESCOLA', orientation='h',
-                    title="Escolas com Maior Reserva no Vespertino",
-                    text_auto=True, color='SALAS_LIVRES_2027_VESP', color_continuous_scale='Purples'
-                )
-                fig_s2.update_layout(showlegend=False, height=380)
-                st.plotly_chart(fig_s2, use_container_width=True)
-
-            st.markdown("##### 🏢 Quadro Geral por Unidade Escolar")
-            st.dataframe(
-                df_s[[
-                    'ESCOLA', 'TOTAL_SALAS', 
-                    'SALAS_LIVRES_2027_MAT', 'SALAS_LIVRES_2027_VESP', 
-                    'SALAS_LIVRES_2027_NOT', 'SALAS_LIVRES_2027_INT', 'OBSERVACAO'
-                ]], use_container_width=True
-            )
-
-        else:
-            st.info("💡 Faça o upload do arquivo 'Levantamento de salas ociosas SRE-2026.xlsx' no menu lateral para habilitar este dashboard.")
-
-    # ------------------------------------------
-    # ABA 5: MATRIZ DE VIABILIDADE
-    # ------------------------------------------
     with aba5:
-        st.subheader("🎯 Matriz de Viabilidade Escolar (Cruzamento T.A. vs Salas Ociosas)")
+        st.subheader("🎯 Matriz de Viabilidade (Salas Ociosas vs Demanda T.A.)")
 
         if file_ta and file_salas:
             df_ta = processar_transferencia_automatica(file_ta)
             df_s = processar_salas_ociosas(file_salas)
 
-            # Padronização e Normalização dos Nomes das Escolas
-            def normalizar_nome(nome):
-                nome = str(nome).upper().strip()
-                substituicoes = {
-                    'COLEGIO': 'COLÉGIO',
-                    'DAVID BARBOA ROLINS': 'DAVID BARBOSA ROLINS',
-                    'CRISTALANDIA': 'CRISTALÂNDIA',
-                    'COLÉGIO OTACÍLIO MARQUES ROSAL': 'COLÉGIO MILITAR DO ESTADO DO TOCANTINS - OTACÍLIO MARQUES ROSAL',
-                    'ESCOLA ESTADUAL DE TEMPO INTEGRAL': 'ESCOLA DE TEMPO INTEGRAL',
-                    'DONA CÃNDIDA': 'DONA CANDIDA',
-                    'KUBITSCHEK DE OLIVERA': 'KUBITSCHEK DE OLIVEIRA'
-                }
-                for de, para in substituicoes.items():
-                    nome = nome.replace(de, para)
-                return nome
+            if cidade_sel != "Todas":
+                df_ta = df_ta[df_ta['CIDADE'] == cidade_sel]
+                df_s = df_s[df_s['ESCOLA'].isin(df_proj_f['ESCOLA'])]
 
-            df_ta['ESCOLA_DESTINO_NORM'] = df_ta['ESCOLA_DESTINO'].apply(normalizar_nome)
-            df_s['ESCOLA_NORM'] = df_s['ESCOLA'].apply(normalizar_nome)
+            if escola_sel != "Todas":
+                df_ta = df_ta[df_ta['ESCOLA_DESTINO'] == escola_sel]
+                df_s = df_s[df_s['ESCOLA'] == escola_sel]
 
-            # Agrupar demanda da T.A. por escola de destino
-            df_ta_resumo = df_ta.groupby('ESCOLA_DESTINO_NORM')['TOTAL_ALUNOS'].sum().reset_index()
+            df_ta_resumo = df_ta.groupby('ESCOLA_DESTINO')['TOTAL_ALUNOS'].sum().reset_index()
             df_ta_resumo['TURMAS_NOVAS_ESTIMADAS'] = df_ta_resumo['TOTAL_ALUNOS'].apply(lambda x: math.ceil(x / 35))
 
-            # Junção LEFT abrangente (mantém todas as 27 escolas da regional)
-            df_matriz = pd.merge(
-                df_s, df_ta_resumo, 
-                left_on='ESCOLA_NORM', right_on='ESCOLA_DESTINO_NORM', 
-                how='left'
-            )
+            df_matriz = pd.merge(df_s, df_ta_resumo, left_on='ESCOLA', right_on='ESCOLA_DESTINO', how='left')
 
             df_matriz['TOTAL_ALUNOS'] = df_matriz['TOTAL_ALUNOS'].fillna(0).astype(int)
             df_matriz['TURMAS_NOVAS_ESTIMADAS'] = df_matriz['TURMAS_NOVAS_ESTIMADAS'].fillna(0).astype(int)
@@ -500,7 +344,6 @@ if file_turmas:
                 axis=1
             )
 
-            st.markdown("##### 🔄 Balanço da Capacidade para Receber Estudantes Novatos em 2027")
             st.dataframe(
                 df_matriz[[
                     'ESCOLA', 'TOTAL_ALUNOS', 'TURMAS_NOVAS_ESTIMADAS', 
@@ -513,8 +356,5 @@ if file_turmas:
                     'SALAS_LIVRES_2027_VESP': 'SALAS LIVRES (VESP)'
                 }), use_container_width=True
             )
-        else:
-            st.info("💡 Envie as planilhas 'Transferência Automática' e 'Levantamento de Salas' no menu lateral para visualizar o cruzamento de viabilidade.")
-
 else:
-    st.warning("⚠️ Carregue a planilha principal 'CadastroDeTurmas' no menu lateral para inicializar o dashboard.")
+    st.warning("⚠️ Carregue a planilha principal 'CadastroDeTurmas' no menu lateral.")
