@@ -1,12 +1,20 @@
 import pandas as pd
 import math
 import io
+import os
 import streamlit as st
 import plotly.express as px
 
 # ==========================================
-# 1. FUNÇÕES DE PROCESSAMENTO
+# 1. FUNÇÕES DE PROCESSAMENTO E CARREGAMENTO
 # ==========================================
+
+def carregar_dados_locais():
+    """Carrega automaticamente os arquivos do repositório/pasta do projeto."""
+    file_turmas = "CadastroDeTurmas_26_10_2026.xlsx" if os.path.exists("CadastroDeTurmas_26_10_2026.xlsx") else None
+    file_ta = "SRE - PARAISO  T.A 2026_2027 (5).xlsx" if os.path.exists("SRE - PARAISO  T.A 2026_2027 (5).xlsx") else None
+    file_salas = "Levantamento de salas ociosas SRE-2026.xlsx" if os.path.exists("Levantamento de salas ociosas SRE-2026.xlsx") else None
+    return file_turmas, file_ta, file_salas
 
 def processar_reordenamento(df):
     """Processa o reordenamento escolar com base na planilha CadastroDeTurmas."""
@@ -123,7 +131,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Estilização CSS personalizada para os KPI Cards
 st.markdown("""
     <style>
     .kpi-container {
@@ -176,14 +183,16 @@ st.title("🏛️ Painel Integrado de Reordenamento Escolar (2026 ➔ 2027)")
 st.markdown("##### **Superintendência Regional de Educação de Paraíso do Tocantins - SEDUC/TO**")
 st.markdown("---")
 
+# Verificação de arquivos locais/embutidos no repositório
+auto_turmas, auto_ta, auto_salas = carregar_dados_locais()
+
 # Sidebar / Carregamento dos Arquivos
 st.sidebar.image("https://img.icons8.com/color/96/school.png", width=70)
 st.sidebar.title("Central de Dados")
-st.sidebar.markdown("Faça o upload das planilhas de monitoramento:")
 
-file_turmas = st.sidebar.file_uploader("1. Cadastro de Turmas (.xlsx)", type=["xlsx"], key="turmas")
-file_ta = st.sidebar.file_uploader("2. Transferência Automática (.xlsx)", type=["xlsx"], key="ta")
-file_salas = st.sidebar.file_uploader("3. Levantamento de Salas (.xlsx)", type=["xlsx"], key="salas")
+file_turmas = st.sidebar.file_uploader("1. Cadastro de Turmas (.xlsx)", type=["xlsx"], key="turmas") or auto_turmas
+file_ta = st.sidebar.file_uploader("2. Transferência Automática (.xlsx)", type=["xlsx"], key="ta") or auto_ta
+file_salas = st.sidebar.file_uploader("3. Levantamento de Salas (.xlsx)", type=["xlsx"], key="salas") or auto_salas
 
 if file_turmas:
     df_raw = pd.read_excel(file_turmas)
@@ -218,7 +227,6 @@ if file_turmas:
     with aba1:
         st.subheader("📋 Planilha Otimizada de Reordenamento 2027")
         
-        # HTML dos Cards
         total_estudantes = df_projetado["TOTAL ESTUDANTES 2027"].sum()
         total_salas = df_projetado["SALAS NECESSÁRIAS 2027"].sum()
         total_escolas = df_projetado["ESCOLA"].nunique()
@@ -453,16 +461,38 @@ if file_turmas:
             df_ta = processar_transferencia_automatica(file_ta)
             df_s = processar_salas_ociosas(file_salas)
 
-            # Agrupar demanda por escola de destino
-            df_ta_resumo = df_ta.groupby('ESCOLA_DESTINO')['TOTAL_ALUNOS'].sum().reset_index()
+            # Padronização e Normalização dos Nomes das Escolas
+            def normalizar_nome(nome):
+                nome = str(nome).upper().strip()
+                substituicoes = {
+                    'COLEGIO': 'COLÉGIO',
+                    'DAVID BARBOA ROLINS': 'DAVID BARBOSA ROLINS',
+                    'CRISTALANDIA': 'CRISTALÂNDIA',
+                    'COLÉGIO OTACÍLIO MARQUES ROSAL': 'COLÉGIO MILITAR DO ESTADO DO TOCANTINS - OTACÍLIO MARQUES ROSAL',
+                    'ESCOLA ESTADUAL DE TEMPO INTEGRAL': 'ESCOLA DE TEMPO INTEGRAL',
+                    'DONA CÃNDIDA': 'DONA CANDIDA',
+                    'KUBITSCHEK DE OLIVERA': 'KUBITSCHEK DE OLIVEIRA'
+                }
+                for de, para in substituicoes.items():
+                    nome = nome.replace(de, para)
+                return nome
+
+            df_ta['ESCOLA_DESTINO_NORM'] = df_ta['ESCOLA_DESTINO'].apply(normalizar_nome)
+            df_s['ESCOLA_NORM'] = df_s['ESCOLA'].apply(normalizar_nome)
+
+            # Agrupar demanda da T.A. por escola de destino
+            df_ta_resumo = df_ta.groupby('ESCOLA_DESTINO_NORM')['TOTAL_ALUNOS'].sum().reset_index()
             df_ta_resumo['TURMAS_NOVAS_ESTIMADAS'] = df_ta_resumo['TOTAL_ALUNOS'].apply(lambda x: math.ceil(x / 35))
 
-            # Unir com o levantamento de salas livres
+            # Junção LEFT abrangente (mantém todas as 27 escolas da regional)
             df_matriz = pd.merge(
                 df_s, df_ta_resumo, 
-                left_on='ESCOLA', right_on='ESCOLA_DESTINO', 
-                how='inner'
+                left_on='ESCOLA_NORM', right_on='ESCOLA_DESTINO_NORM', 
+                how='left'
             )
+
+            df_matriz['TOTAL_ALUNOS'] = df_matriz['TOTAL_ALUNOS'].fillna(0).astype(int)
+            df_matriz['TURMAS_NOVAS_ESTIMADAS'] = df_matriz['TURMAS_NOVAS_ESTIMADAS'].fillna(0).astype(int)
 
             df_matriz['SALAS_DISPONIVEIS_TOTAL'] = df_matriz['SALAS_LIVRES_2027_MAT'] + df_matriz['SALAS_LIVRES_2027_VESP']
             df_matriz['STATUS_CAPACIDADE'] = df_matriz.apply(
