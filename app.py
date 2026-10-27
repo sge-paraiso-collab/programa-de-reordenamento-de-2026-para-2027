@@ -14,9 +14,8 @@ def normalizar_texto(texto):
     if pd.isna(texto):
         return ""
     txt = str(texto).upper().strip()
-    txt = txt.replace("  ", " ")
+    txt = " ".join(txt.split())
     
-    # Correção de anomalias conhecidas
     subst = {
         'PARAÍSO DO TOCANTINS DO TOCAN': 'PARAÍSO DO TOCANTINS',
         'PARAISO DO TOCANTINS': 'PARAÍSO DO TOCANTINS',
@@ -118,12 +117,17 @@ def processar_reordenamento(df):
     return pd.DataFrame(resultados)
 
 def processar_transferencia_automatica(file):
+    """Carrega T.A. eliminando duplicidades entre redes estaduais e municipais."""
     excel_ta = pd.ExcelFile(file)
     dfs = []
 
     if 'Município -> Estado' in excel_ta.sheet_names:
         df_mun = pd.read_excel(file, sheet_name='Município -> Estado', header=1)
         df_mun = df_mun.dropna(subset=['MUNICIPIO', 'QUANT. DE ALUNOS']).copy()
+        
+        # Filtra e remove escolas estaduais que foram listadas erroneamente na aba municipal
+        df_mun['ESCOLA_ORIGEM_TEMP'] = df_mun['U.E. ORIGEM'].apply(normalizar_texto)
+        df_mun = df_mun[~df_mun['ESCOLA_ORIGEM_TEMP'].str.contains('ESCOLA ESTADUAL|COLÉGIO ESTADUAL|CENTRO DE ENSINO', na=False)].copy()
         df_mun['TIPO_FLUXO'] = 'Município -> Estado'
         dfs.append(df_mun)
 
@@ -189,6 +193,12 @@ st.title("🏛️ Painel Integrado de Reordenamento Escolar (2026 ➔ 2027)")
 st.markdown("##### **Superintendência Regional de Educação de Paraíso do Tocantins - SEDUC/TO**")
 st.markdown("---")
 
+# Botão para zerar os dados no menu lateral
+if st.sidebar.button("🗑️ Zerar Cache e Limpar Dados"):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    st.rerun()
+
 auto_turmas, auto_ta, auto_salas = carregar_dados_locais()
 
 st.sidebar.image("https://img.icons8.com/color/96/school.png", width=70)
@@ -217,8 +227,6 @@ if file_turmas:
 
     if escola_sel != "Todas":
         df_proj_f = df_proj_f[df_proj_f['ESCOLA'] == escola_sel]
-
-    tipo_oferta = st.sidebar.radio("Tipo de Oferta Escolar:", ["Todas", "Parcial", "Tempo Integral"])
 
     aba1, aba2, aba3, aba4, aba5 = st.tabs([
         "📋 Projeção Detalhada", 
@@ -272,11 +280,9 @@ if file_turmas:
         if file_ta:
             df_ta = processar_transferencia_automatica(file_ta)
             
-            # Filtro Inteligente Flexível por Nome
             if cidade_sel != "Todas":
                 df_ta = df_ta[df_ta['CIDADE'].str.contains(cidade_sel[:8], case=False, na=False)]
             if escola_sel != "Todas":
-                # Busca flexível para garantir escolas com nomes levemente divergentes
                 termo_escola = escola_sel.replace("COLÉGIO ESTADUAL", "").replace("CENTRO DE ENSINO MÉDIO", "").strip()[:10]
                 df_ta = df_ta[df_ta['ESCOLA_DESTINO'].str.contains(termo_escola, case=False, na=False)]
 
@@ -293,7 +299,7 @@ if file_turmas:
                     <div class="kpi-sub">Atendimento especializado</div>
                 </div>
                 <div class="kpi-card kpi-card-blue">
-                    <div class="kpi-title">Escolas Municipais Doadoras</div>
+                    <div class="kpi-title">Escolas Origem Doadoras</div>
                     <div class="kpi-value">{df_ta['ESCOLA_ORIGEM'].nunique()}</div>
                     <div class="kpi-sub">Origem da demanda</div>
                 </div>
@@ -318,21 +324,17 @@ if file_turmas:
             df_ta = processar_transferencia_automatica(file_ta)
             df_s = processar_salas_ociosas(file_salas)
 
-            # Agrupar T.A. por escola de destino usando chave simplificada
             df_ta['CHAVE_ESCOLA'] = df_ta['ESCOLA_DESTINO'].apply(lambda x: x.replace("COLÉGIO ESTADUAL", "").replace("CENTRO DE ENSINO MÉDIO", "").replace("ESCOLA ESTADUAL", "").strip())
             df_ta_resumo = df_ta.groupby('CHAVE_ESCOLA')['TOTAL_ALUNOS'].sum().reset_index()
             df_ta_resumo.rename(columns={'TOTAL_ALUNOS': 'DEMANDA_TA_ALUNOS'}, inplace=True)
             df_ta_resumo['TURMAS_NOVAS_TA'] = df_ta_resumo['DEMANDA_TA_ALUNOS'].apply(lambda x: math.ceil(x / 35))
 
-            # Agrupar Reordenamento
             df_proj_f['CHAVE_ESCOLA'] = df_proj_f['ESCOLA'].apply(lambda x: x.replace("COLÉGIO ESTADUAL", "").replace("CENTRO DE ENSINO MÉDIO", "").replace("ESCOLA ESTADUAL", "").strip())
             df_proj_resumo = df_proj_f.groupby('CHAVE_ESCOLA')[['TOTAL ESTUDANTES 2027', 'SALAS NECESSÁRIAS 2027']].sum().reset_index()
             df_proj_resumo.rename(columns={'TOTAL ESTUDANTES 2027': 'ALUNOS_REORD', 'SALAS NECESSÁRIAS 2027': 'SALAS_REORD'}, inplace=True)
 
-            # Chave de junção nas salas
             df_s['CHAVE_ESCOLA'] = df_s['ESCOLA'].apply(lambda x: x.replace("COLÉGIO ESTADUAL", "").replace("CENTRO DE ENSINO MÉDIO", "").replace("ESCOLA ESTADUAL", "").strip())
 
-            # Merge
             df_matriz = pd.merge(df_s, df_proj_resumo, on='CHAVE_ESCOLA', how='left')
             df_matriz = pd.merge(df_matriz, df_ta_resumo, on='CHAVE_ESCOLA', how='left')
 
